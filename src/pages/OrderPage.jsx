@@ -4,7 +4,7 @@ import { CheckCircle2, Mic, RefreshCcw, Send } from 'lucide-react'
 import PatientCard from '../components/PatientCard'
 import ProgramCard from '../components/ProgramCard'
 import { patients } from '../data/mockPatients'
-import { generateProgram } from '../hooks/useOpenAI'
+import { extractDiagnosisNote, generateProgram } from '../hooks/useOpenAI'
 import { useWhisper } from '../hooks/useWhisper'
 
 function OrderPage() {
@@ -17,6 +17,8 @@ function OrderPage() {
   const [step, setStep] = useState(patientId ? 'record' : 'select')
   const [transcription, setTranscription] = useState('')
   const [program, setProgram] = useState(null)
+  const [note, setNote] = useState({ diagnosis: '', key_findings: '', plan: '' })
+  const [isExtracting, setIsExtracting] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [generationError, setGenerationError] = useState('')
   const [lang, setLang] = useState('en')
@@ -43,18 +45,31 @@ function OrderPage() {
     if (text) setTranscription(text)
   }
 
+  async function handleExtractNote() {
+    setStep('note')
+    setIsExtracting(true)
+    try {
+      const extracted = await extractDiagnosisNote(transcription)
+      setNote(extracted)
+    } catch {
+      // fallback — physician fills fields manually
+    } finally {
+      setIsExtracting(false)
+    }
+  }
+
   async function handleGenerate() {
     setIsGenerating(true)
     setGenerationError('')
     setStep('generating')
 
     try {
-      const result = await generateProgram(patient, transcription)
+      const result = await generateProgram(patient, transcription, note)
       setProgram(result)
       setStep('review')
     } catch (error) {
       setGenerationError(error.message || 'Unable to generate program.')
-      setStep('record')
+      setStep('note')
     } finally {
       setIsGenerating(false)
     }
@@ -63,6 +78,7 @@ function OrderPage() {
   function resetOrder() {
     setStep('select')
     setTranscription('')
+    setNote({ diagnosis: '', key_findings: '', plan: '' })
     setProgram(null)
     setGenerationError('')
     navigate('/order')
@@ -75,6 +91,58 @@ function OrderPage() {
         {patients.map((patientItem) => (
           <PatientCard key={patientItem.patient_id} patient={patientItem} onSelect={selectPatient} />
         ))}
+      </div>
+    )
+  }
+
+  if (step === 'note') {
+    return (
+      <div className="fade-in space-y-4">
+        <ScreenHeader eyebrow="Workout Order" title="Diagnosis note" />
+        <PatientSummary patient={patient} />
+
+        {isExtracting ? (
+          <div className="flex min-h-[20vh] flex-col items-center justify-center gap-3">
+            <div className="spinner" />
+            <p className="text-sm font-semibold text-gray-500">Extracting note from transcript...</p>
+          </div>
+        ) : (
+          <section className="rounded-card bg-white p-4 shadow-card space-y-4">
+            <NoteField
+              label="Diagnosis / Chief Complaint"
+              value={note.diagnosis}
+              onChange={(v) => setNote((n) => ({ ...n, diagnosis: v }))}
+              placeholder="e.g. Post-TKA right knee, Week 4 recovery"
+            />
+            <NoteField
+              label="Key Findings"
+              value={note.key_findings}
+              onChange={(v) => setNote((n) => ({ ...n, key_findings: v }))}
+              placeholder="e.g. ROM 92°, pain 3/10, mild swelling"
+            />
+            <NoteField
+              label="Plan / Orders"
+              value={note.plan}
+              onChange={(v) => setNote((n) => ({ ...n, plan: v }))}
+              placeholder="e.g. Progress heel slides, increase target flexion to 110°"
+            />
+          </section>
+        )}
+
+        {generationError ? (
+          <div className="rounded-card border border-red-100 bg-red-50 p-3">
+            <p className="text-sm leading-6 text-danger">{generationError}</p>
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          disabled={isExtracting}
+          onClick={handleGenerate}
+          className="w-full rounded-button bg-primary px-4 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:bg-gray-300"
+        >
+          Generate Program
+        </button>
       </div>
     )
   }
@@ -265,10 +333,10 @@ function OrderPage() {
       <button
         type="button"
         disabled={!transcription.trim() || whisper.isRecording || whisper.isTranscribing}
-        onClick={handleGenerate}
+        onClick={handleExtractNote}
         className="w-full rounded-button bg-primary px-4 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:bg-gray-300"
       >
-        Generate Program
+        Continue
       </button>
     </div>
   )
@@ -295,6 +363,21 @@ function PatientSummary({ patient }) {
       </div>
       <p className="mt-4 text-sm italic leading-6 text-gray-500">"{patient.goal}"</p>
     </section>
+  )
+}
+
+function NoteField({ label, value, onChange, placeholder }) {
+  return (
+    <div>
+      <label className="block text-xs font-semibold uppercase tracking-wider text-gray-400">{label}</label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={2}
+        className="mt-2 w-full resize-none rounded-card border border-gray-200 bg-gray-50 p-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-primary focus:bg-white focus:ring-2 focus:ring-blue-100"
+      />
+    </div>
   )
 }
 

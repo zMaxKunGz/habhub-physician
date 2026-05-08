@@ -43,7 +43,8 @@ const programSystemPrompt = `You are a clinical AI assistant specialized in post
 You help physicians design precise, safe home exercise programs for orthopedic surgery patients.
 
 Rules:
-- Follow evidence-based PT protocols for the given surgery type and recovery week.
+- Generate ONLY the exercises explicitly mentioned in the physician's order. Do not add extra exercises.
+- If the physician orders one exercise, the output must contain exactly one exercise in the array.
 - Every program must include stop conditions and safety precautions.
 - Calibrate intensity to the patient's post-op week — do not over-prescribe.
 - Output ONLY a valid JSON object matching the schema below. No prose. No markdown fences.
@@ -71,6 +72,18 @@ Output schema:
   "notes_to_patient": string
 }`
 
+const noteExtractionSystemPrompt = `You are a clinical AI assistant. Extract structured diagnosis note fields from a physician's transcribed voice order.
+Output ONLY a valid JSON object. No prose. No markdown fences.
+
+Output schema:
+{
+  "diagnosis": string (chief complaint or diagnosis, 1-2 sentences),
+  "key_findings": string (ROM, pain score, or notable clinical observations, 1-2 sentences),
+  "plan": string (physician orders and next steps, 1-2 sentences)
+}
+
+If a field cannot be determined from the transcript, use an empty string "".`
+
 const dashboardSystemPrompt = `You are a clinical AI assistant helping physicians monitor post-operative physical therapy patients.
 Analyze the patient's workout data and provide a concise, actionable progress summary.
 Be medically precise. Flag concerns clearly. Keep language direct and professional.
@@ -86,20 +99,38 @@ Output schema:
   ]
 }`
 
-export async function generateProgram(patient, transcribedOrder) {
+export async function extractDiagnosisNote(transcribedText) {
+  const userPrompt = `Transcribed physician voice order:
+"${transcribedText}"
+
+Extract the diagnosis note fields from the above transcript. Return only the JSON object.`
+
+  return callChatCompletion([
+    { role: 'system', content: noteExtractionSystemPrompt },
+    { role: 'user', content: userPrompt },
+  ])
+}
+
+export async function generateProgram(patient, transcribedOrder, note = null) {
   const consent = patient.consent_status
+  const noteSection = note
+    ? `\nDiagnosis Note:
+- Diagnosis / Chief Complaint: ${note.diagnosis}
+- Key Findings: ${note.key_findings}
+- Plan / Orders: ${note.plan}`
+    : ''
+
   const userPrompt = `Patient:
 - Name: ${patient.display_name}, Age: ${patient.age}
 - Diagnosis: ${patient.condition} — ${patient.surgery_type}, ${patient.affected_side}
 - Post-op Week: ${patient.post_op_week}
 - Recovery Goal: ${patient.goal}
 - Consent: camera_tracking=${consent.camera_tracking}, voice_command=${consent.voice_command}
-
+${noteSection}
 Physician Order (transcribed by voice):
 "${transcribedOrder}"
 
-Generate a safe, evidence-based home exercise program based on the physician's order above.
-Follow standard ${patient.surgery_type} post-op Week ${patient.post_op_week} PT protocol.
+Generate a home exercise program containing ONLY the exercise(s) the physician explicitly ordered above. Do not add supplementary or complementary exercises.
 Return only the JSON object — no explanation, no markdown.`
 
   return callChatCompletion([
